@@ -27,6 +27,9 @@ namespace cAlgo.Robots
         [Parameter("Take Profit (pips)", DefaultValue = 70)]
         public int TakeProfitPips { get; set; }
 
+        [Parameter("Trade Volume (units)", DefaultValue = 100000)]
+        public double TradeVolumeInUnits { get; set; }
+
         private MovingAverage epanechnikovMA;
         private MovingAverage logisticMA;
         private MovingAverage waveMA;
@@ -34,7 +37,7 @@ namespace cAlgo.Robots
         private double prevAverage;
         private double prevUpperBand;
         private double prevLowerBand;
-        private double tradeVolume;
+        private double normalizedTradeVolume;
 
         private double[] volumeArray;
         private double[] cnvArray;
@@ -55,8 +58,8 @@ namespace cAlgo.Robots
 
             InitializeArrays();
             
-            tradeVolume = Symbol.NormalizeVolumeInUnits(100000, RoundingMode.ToNearest);
-            Print($"Normalized trade volume: {tradeVolume} units");
+            normalizedTradeVolume = Symbol.NormalizeVolumeInUnits(TradeVolumeInUnits, RoundingMode.ToNearest);
+            Print($"Normalized trade volume: {normalizedTradeVolume} units");
         }
 
         private void InitializeArrays()
@@ -167,7 +170,7 @@ namespace cAlgo.Robots
             try
             {
                 Print("Buy signal detected - Executing buy order...");
-                var result = ExecuteMarketOrder(TradeType.Buy, SymbolName, tradeVolume, "Combined_Buy", StopLossPips, TakeProfitPips);
+                var result = ExecuteMarketOrder(TradeType.Buy, SymbolName, normalizedTradeVolume, "Combined_Buy", StopLossPips, TakeProfitPips);
                 if (result.IsSuccessful)
                     Print($"Buy order executed at {result.Position.EntryPrice}");
                 else
@@ -184,7 +187,7 @@ namespace cAlgo.Robots
             try
             {
                 Print("Sell signal detected - Executing sell order...");
-                var result = ExecuteMarketOrder(TradeType.Sell, SymbolName, tradeVolume, "Combined_Sell", StopLossPips, TakeProfitPips);
+                var result = ExecuteMarketOrder(TradeType.Sell, SymbolName, normalizedTradeVolume, "Combined_Sell", StopLossPips, TakeProfitPips);
                 if (result.IsSuccessful)
                     Print($"Sell order executed at {result.Position.EntryPrice}");
                 else
