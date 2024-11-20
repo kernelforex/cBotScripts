@@ -34,78 +34,115 @@ namespace cAlgo.Robots
         public double TakeProfitPips { get; set; }
 
         private AverageTrueRange atr;
-        private double[] upperBand;
-        private double[] lowerBand;
-        private int[] direction;
-        private double[] superTrend;
+        private Queue<double> upperBand;
+        private Queue<double> lowerBand;
+        private Queue<int> direction;
+        private Queue<double> superTrend;
         private List<double> volatilityData;
         private int currentCluster;
+        private const int QueueSize = 3; // Keep only recent values
 
         protected override void OnStart()
         {
             atr = Indicators.AverageTrueRange(AtrLength, MovingAverageType.Simple);
             volatilityData = new List<double>();
             
-            upperBand = new double[Bars.Count];
-            lowerBand = new double[Bars.Count];
-            direction = new int[Bars.Count];
-            superTrend = new double[Bars.Count];
+            upperBand = new Queue<double>(QueueSize);
+            lowerBand = new Queue<double>(QueueSize);
+            direction = new Queue<int>(QueueSize);
+            superTrend = new Queue<double>(QueueSize);
+
+            // Initialize queues
+            for (int i = 0; i < QueueSize; i++)
+            {
+                upperBand.Enqueue(0);
+                lowerBand.Enqueue(0);
+                direction.Enqueue(1);
+                superTrend.Enqueue(0);
+            }
+        }
+
+        private void MaintainQueueSize(Queue<double> queue)
+        {
+            while (queue.Count > QueueSize)
+                queue.Dequeue();
+        }
+
+        private void MaintainQueueSize(Queue<int> queue)
+        {
+            while (queue.Count > QueueSize)
+                queue.Dequeue();
         }
 
         protected override void OnTick()
         {
-            int index = Bars.Count - 1;
-            if (index < TrainingDataPeriod) return;
+            if (Bars.Count < TrainingDataPeriod + 1) return;
 
             UpdateVolatilityData();
-            CalculateSuperTrend(index);
-            HandleTrading(index);
+            CalculateSuperTrend();
+            HandleTrading();
         }
 
         private void UpdateVolatilityData()
         {
             volatilityData.Clear();
-            for (int i = 0; i < TrainingDataPeriod; i++)
+            for (int i = 0; i < Math.Min(TrainingDataPeriod, Bars.Count); i++)
             {
-                volatilityData.Add(atr.Result[i]);
+                if (atr.Result[i] > 0)
+                    volatilityData.Add(atr.Result[i]);
             }
         }
 
-        private void CalculateSuperTrend(int index)
+        private void CalculateSuperTrend()
         {
+            if (volatilityData.Count == 0) return;
+
             double assignedCentroid = GetVolatilityCluster();
-            double src = (Bars.HighPrices[index] + Bars.LowPrices[index]) / 2;
+            double src = (MarketSeries.High.Last(0) + MarketSeries.Low.Last(0)) / 2;
             
-            upperBand[index] = src + Factor * assignedCentroid;
-            lowerBand[index] = src - Factor * assignedCentroid;
+            double newUpperBand = src + Factor * assignedCentroid;
+            double newLowerBand = src - Factor * assignedCentroid;
 
-            if (index > 0)
-            {
-                upperBand[index] = Bars.ClosePrices[index - 1] > upperBand[index - 1] ? 
-                    Math.Min(upperBand[index], upperBand[index - 1]) : upperBand[index];
-                    
-                lowerBand[index] = Bars.ClosePrices[index - 1] < lowerBand[index - 1] ? 
-                    Math.Max(lowerBand[index], lowerBand[index - 1]) : lowerBand[index];
+            // Adjust bands based on previous values
+            if (Bars.ClosePrices.Last(1) > upperBand.Last())
+                newUpperBand = Math.Min(newUpperBand, upperBand.Last());
+            if (Bars.ClosePrices.Last(1) < lowerBand.Last())
+                newLowerBand = Math.Max(newLowerBand, lowerBand.Last());
 
-                direction[index] = direction[index - 1];
-                
-                if (Bars.ClosePrices[index] > upperBand[index])
-                    direction[index] = -1;
-                else if (Bars.ClosePrices[index] < lowerBand[index])
-                    direction[index] = 1;
+            // Update direction
+            int newDirection = direction.Last();
+            if (Bars.ClosePrices.Last(0) > upperBand.Last())
+                newDirection = -1;
+            else if (Bars.ClosePrices.Last(0) < lowerBand.Last())
+                newDirection = 1;
 
-                superTrend[index] = direction[index] == -1 ? lowerBand[index] : upperBand[index];
-            }
+            // Update queues
+            upperBand.Enqueue(newUpperBand);
+            lowerBand.Enqueue(newLowerBand);
+            direction.Enqueue(newDirection);
+            superTrend.Enqueue(newDirection == -1 ? newLowerBand : newUpperBand);
+
+            // Maintain queue sizes
+            MaintainQueueSize(upperBand);
+            MaintainQueueSize(lowerBand);
+            MaintainQueueSize(direction);
+            MaintainQueueSize(superTrend);
         }
 
         private double GetVolatilityCluster()
         {
-            var sortedVol = volatilityData.OrderBy(x => x).ToList();
-            double highVol = sortedVol[(int)(sortedVol.Count * HighVolPercentile)];
-            double medVol = sortedVol[(int)(sortedVol.Count * MedVolPercentile)];
-            double lowVol = sortedVol[(int)(sortedVol.Count * LowVolPercentile)];
+            if (volatilityData.Count == 0) return 0;
 
-            double currentVol = atr.Result.Last();
+            var sortedVol = volatilityData.OrderBy(x => x).ToList();
+            int highIndex = Math.Min((int)(sortedVol.Count * HighVolPercentile), sortedVol.Count - 1);
+            int medIndex = Math.Min((int)(sortedVol.Count * MedVolPercentile), sortedVol.Count - 1);
+            int lowIndex = Math.Min((int)(sortedVol.Count * LowVolPercentile), sortedVol.Count - 1);
+
+            double highVol = sortedVol[highIndex];
+            double medVol = sortedVol[medIndex];
+            double lowVol = sortedVol[lowIndex];
+
+            double currentVol = atr.Result.Last(0);
             
             var distances = new[]
             {
@@ -118,28 +155,34 @@ namespace cAlgo.Robots
             return new[] { highVol, medVol, lowVol }[currentCluster];
         }
 
-        private void HandleTrading(int index)
+        private void HandleTrading()
         {
-            if (index < 1) return;
+            if (direction.Count < 2) return;
 
-            bool bullishCross = direction[index] < direction[index - 1];
-            bool bearishCross = direction[index] > direction[index - 1];
+            var dirArray = direction.ToArray();
+            bool bullishCross = dirArray[dirArray.Length - 1] < dirArray[dirArray.Length - 2];
+            bool bearishCross = dirArray[dirArray.Length - 1] > dirArray[dirArray.Length - 2];
 
-            if (bullishCross && Positions.Count == 0)
+            if (bullishCross && !HasOpenPosition())
             {
                 ExecuteMarketOrder(TradeType.Buy, SymbolName, 1, "Adaptive SuperTrend Buy", 
                     StopLossPips, TakeProfitPips);
             }
-            else if (bearishCross && Positions.Count == 0)
+            else if (bearishCross && !HasOpenPosition())
             {
                 ExecuteMarketOrder(TradeType.Sell, SymbolName, 1, "Adaptive SuperTrend Sell", 
                     StopLossPips, TakeProfitPips);
             }
         }
 
+        private bool HasOpenPosition()
+        {
+            return Positions.Count > 0;
+        }
+
         protected override void OnStop()
         {
-            // Clean up resources if needed
+            // Cleanup if needed
         }
     }
 }
