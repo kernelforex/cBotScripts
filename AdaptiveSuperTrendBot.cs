@@ -155,25 +155,27 @@ namespace cAlgo.Robots
             return new[] { highVol, medVol, lowVol }[currentCluster];
         }
 
-        private void HandleTrading()
-        {
-            if (direction.Count < 2) return;
+private void HandleTrading()
+{
+    if (direction.Count < 2) return;
 
-            var dirArray = direction.ToArray();
-            bool bullishCross = dirArray[dirArray.Length - 1] < dirArray[dirArray.Length - 2];
-            bool bearishCross = dirArray[dirArray.Length - 1] > dirArray[dirArray.Length - 2];
+    var dirArray = direction.ToArray();
+    bool bullishCross = dirArray[dirArray.Length - 1] < dirArray[dirArray.Length - 2];
+    bool bearishCross = dirArray[dirArray.Length - 1] > dirArray[dirArray.Length - 2];
 
-            if (bullishCross && !HasOpenPosition())
-            {
-                ExecuteMarketOrder(TradeType.Buy, SymbolName, 1, "Adaptive SuperTrend Buy", 
-                    StopLossPips, TakeProfitPips);
-            }
-            else if (bearishCross && !HasOpenPosition())
-            {
-                ExecuteMarketOrder(TradeType.Sell, SymbolName, 1, "Adaptive SuperTrend Sell", 
-                    StopLossPips, TakeProfitPips);
-            }
-        }
+    double volume = Symbol.NormalizeVolumeInUnits(Symbol.QuantityToVolumeInUnits(1.0));
+
+    if (bullishCross && !HasOpenPosition())
+    {
+        ExecuteMarketOrder(TradeType.Buy, SymbolName, volume, "Adaptive SuperTrend Buy", 
+            StopLossPips, TakeProfitPips);
+    }
+    else if (bearishCross && !HasOpenPosition())
+    {
+        ExecuteMarketOrder(TradeType.Sell, SymbolName, volume, "Adaptive SuperTrend Sell", 
+            StopLossPips, TakeProfitPips);
+    }
+}
 
         private bool HasOpenPosition()
         {
