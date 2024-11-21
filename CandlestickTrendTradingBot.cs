@@ -34,11 +34,13 @@ namespace cAlgo.Robots
         private Position currentPosition;
         private bool canTrade = true;
         private double entryPrice = 0;
+        private DateTime lastTradeTime;
 
         protected override void OnStart()
         {
             hullMA = Indicators.MovingAverage(Bars.ClosePrices, maLength, MovingAverageType.Hull);
             previousMA = hullMA.Result.Last(1);
+            lastTradeTime = DateTime.MinValue;
         }
 
         protected override void OnTick()
@@ -46,6 +48,10 @@ namespace cAlgo.Robots
             if (!canTrade) return;
 
             var currentBar = Bars.LastBar;
+            
+            // Check if we're still in the same bar as our last trade
+            if (currentBar.OpenTime <= lastTradeTime) return;
+            
             double priceMovement = Math.Abs(currentBar.Close - currentBar.Open) / currentBar.Open * 100;
             
             if (currentPosition != null && stopLossPips > 0)
@@ -87,6 +93,7 @@ namespace cAlgo.Robots
                         if (result.IsSuccessful)
                         {
                             entryPrice = result.Position.EntryPrice;
+                            lastTradeTime = currentBar.OpenTime;
                         }
                     }
                     else if (currentBar.Close < currentBar.Open && priceMovement >= bearishThreshold)
@@ -97,6 +104,7 @@ namespace cAlgo.Robots
                         if (result.IsSuccessful)
                         {
                             entryPrice = result.Position.EntryPrice;
+                            lastTradeTime = currentBar.OpenTime;
                         }
                     }
                 }
