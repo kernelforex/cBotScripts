@@ -49,7 +49,6 @@ namespace cAlgo.Robots
 
             var currentBar = Bars.LastBar;
             
-            // Check if we're still in the same bar as our last trade
             if (currentBar.OpenTime <= lastTradeTime) return;
             
             double priceMovement = Math.Abs(currentBar.Close - currentBar.Open) / currentBar.Open * 100;
@@ -87,9 +86,8 @@ namespace cAlgo.Robots
                     
                     if (currentBar.Close > currentBar.Open && priceMovement >= bullishThreshold)
                     {
-                        var takeProfitPrice = Symbol.Ask + Symbol.PipSize * takeProfitPips;
-                        double? stopLossPrice = stopLossPips > 0 ? Symbol.Ask - Symbol.PipSize * stopLossPips : null;
-                        var result = ExecuteMarketOrder(TradeType.Buy, SymbolName, volumeInUnits, "BullishTrade", stopLossPrice, takeProfitPrice);
+                        var result = ExecuteMarketOrder(TradeType.Buy, SymbolName, volumeInUnits, "BullishTrade", 
+                            stopLossPips, takeProfitPips);
                         if (result.IsSuccessful)
                         {
                             entryPrice = result.Position.EntryPrice;
@@ -98,9 +96,8 @@ namespace cAlgo.Robots
                     }
                     else if (currentBar.Close < currentBar.Open && priceMovement >= bearishThreshold)
                     {
-                        var takeProfitPrice = Symbol.Bid - Symbol.PipSize * takeProfitPips;
-                        double? stopLossPrice = stopLossPips > 0 ? Symbol.Bid + Symbol.PipSize * stopLossPips : null;
-                        var result = ExecuteMarketOrder(TradeType.Sell, SymbolName, volumeInUnits, "BearishTrade", stopLossPrice, takeProfitPrice);
+                        var result = ExecuteMarketOrder(TradeType.Sell, SymbolName, volumeInUnits, "BearishTrade", 
+                            stopLossPips, takeProfitPips);
                         if (result.IsSuccessful)
                         {
                             entryPrice = result.Position.EntryPrice;
