@@ -7,81 +7,70 @@ using System.Linq;
 namespace cAlgo.Robots
 {
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
-    public class AdaptiveSuperTrendBot : Robot
+    public class ImprovedAdaptiveSuperTrendBot : Robot
     {
         [Parameter("ATR Length", DefaultValue = 10, Group = "SuperTrend Settings")]
         public int AtrLength { get; set; }
 
-        [Parameter("SuperTrend Factor", DefaultValue = 3.0, Group = "SuperTrend Settings")]
+        [Parameter("SuperTrend Factor", DefaultValue = 2.0, Group = "SuperTrend Settings")]
         public double Factor { get; set; }
 
-        [Parameter("Training Data Length", DefaultValue = 100, Group = "K-Means Settings")]
+        [Parameter("Training Data Length", DefaultValue = 50, Group = "Volatility Settings")]
         public int TrainingDataPeriod { get; set; }
 
-        [Parameter("High Volatility Percentile", DefaultValue = 0.75, Group = "K-Means Settings")]
-        public double HighVolPercentile { get; set; }
+        [Parameter("Dynamic Factor Adjustment", DefaultValue = true, Group = "Volatility Settings")]
+        public bool UseDynamicFactor { get; set; }
 
-        [Parameter("Medium Volatility Percentile", DefaultValue = 0.5, Group = "K-Means Settings")]
-        public double MedVolPercentile { get; set; }
-
-        [Parameter("Low Volatility Percentile", DefaultValue = 0.25, Group = "K-Means Settings")]
-        public double LowVolPercentile { get; set; }
-
-        [Parameter("Stop Loss (pips)", DefaultValue = 30)]
+        [Parameter("Stop Loss (pips)", DefaultValue = 20)]
         public double StopLossPips { get; set; }
 
-        [Parameter("Take Profit (pips)", DefaultValue = 60)]
+        [Parameter("Take Profit (pips)", DefaultValue = 40)]
         public double TakeProfitPips { get; set; }
 
-        [Parameter("Minimum RSI", DefaultValue = 30)]
-        public double MinRSI { get; set; }
+        [Parameter("Minimum Bars Between Trades", DefaultValue = 2)]
+        public int MinBarsBetweenTrades { get; set; }
 
-        [Parameter("Maximum RSI", DefaultValue = 70)]
-        public double MaxRSI { get; set; }
+        [Parameter("Use Price Action Confirmation", DefaultValue = true)]
+        public bool UsePriceActionConfirmation { get; set; }
 
         private AverageTrueRange atr;
+        private ExponentialMovingAverage ema20;
+        private ExponentialMovingAverage ema50;
         private RelativeStrengthIndex rsi;
+        private MacdCrossOver macd;
         private Queue<double> upperBand;
         private Queue<double> lowerBand;
         private Queue<int> direction;
-        private Queue<double> superTrend;
         private List<double> volatilityData;
-        private int currentCluster;
-        private const int QueueSize = 3;
-        private double lastTradePrice = 0;
-        private const int MinBarsSinceLastTrade = 5;
         private DateTime lastTradeTime = DateTime.MinValue;
+        private const int QueueSize = 3;
 
         protected override void OnStart()
         {
-            atr = Indicators.AverageTrueRange(AtrLength, MovingAverageType.Simple);
+            // Initialize indicators
+            atr = Indicators.AverageTrueRange(AtrLength, MovingAverageType.Exponential);
+            ema20 = Indicators.ExponentialMovingAverage(MarketSeries.Close, 20);
+            ema50 = Indicators.ExponentialMovingAverage(MarketSeries.Close, 50);
             rsi = Indicators.RelativeStrengthIndex(MarketSeries.Close, 14);
-            volatilityData = new List<double>();
+            macd = Indicators.MacdCrossOver(MarketSeries.Close, 12, 26, 9);
             
+            // Initialize collections
+            volatilityData = new List<double>();
             upperBand = new Queue<double>(QueueSize);
             lowerBand = new Queue<double>(QueueSize);
             direction = new Queue<int>(QueueSize);
-            superTrend = new Queue<double>(QueueSize);
 
+            InitializeQueues();
+        }
+
+        private void InitializeQueues()
+        {
             for (int i = 0; i < QueueSize; i++)
             {
-                upperBand.Enqueue(0);
-                lowerBand.Enqueue(0);
+                upperBand.Enqueue(double.MaxValue);
+                lowerBand.Enqueue(double.MinValue);
                 direction.Enqueue(1);
-                superTrend.Enqueue(0);
             }
-        }
-
-        private void MaintainQueueSize(Queue<double> queue)
-        {
-            while (queue.Count > QueueSize)
-                queue.Dequeue();
-        }
-
-        private void MaintainQueueSize(Queue<int> queue)
-        {
-            while (queue.Count > QueueSize)
-                queue.Dequeue();
         }
 
         protected override void OnTick()
@@ -89,8 +78,8 @@ namespace cAlgo.Robots
             if (Bars.Count < TrainingDataPeriod + 1) return;
 
             UpdateVolatilityData();
-            CalculateSuperTrend();
-            HandleTrading();
+            CalculateAdaptiveSuperTrend();
+            ExecuteTrading();
         }
 
         private void UpdateVolatilityData()
@@ -103,136 +92,140 @@ namespace cAlgo.Robots
             }
         }
 
-        private void CalculateSuperTrend()
+        private double CalculateDynamicFactor()
         {
-            if (volatilityData.Count == 0) return;
+            if (!UseDynamicFactor || volatilityData.Count == 0) 
+                return Factor;
 
-            double assignedCentroid = GetVolatilityCluster();
-            double src = (MarketSeries.High.Last(0) + MarketSeries.Low.Last(0)) / 2;
+            double currentVol = atr.Result.Last(0);
+            double avgVol = volatilityData.Average();
+            double stdDev = Math.Sqrt(volatilityData.Select(x => Math.Pow(x - avgVol, 2)).Average());
             
-            double newUpperBand = src + Factor * assignedCentroid;
-            double newLowerBand = src - Factor * assignedCentroid;
+            if (currentVol > avgVol + stdDev)
+                return Factor * 1.5;
+            else if (currentVol < avgVol - stdDev)
+                return Factor * 0.75;
+            
+            return Factor;
+        }
 
-            if (Bars.ClosePrices.Last(1) > upperBand.Last())
+        private void CalculateAdaptiveSuperTrend()
+        {
+            double dynamicFactor = CalculateDynamicFactor();
+            double src = (MarketSeries.High.Last(0) + MarketSeries.Low.Last(0)) / 2;
+            double atrValue = atr.Result.Last(0);
+            
+            double newUpperBand = src + dynamicFactor * atrValue;
+            double newLowerBand = src - dynamicFactor * atrValue;
+
+            if (MarketSeries.Close.Last(1) > upperBand.Last())
                 newUpperBand = Math.Min(newUpperBand, upperBand.Last());
-            if (Bars.ClosePrices.Last(1) < lowerBand.Last())
+            if (MarketSeries.Close.Last(1) < lowerBand.Last())
                 newLowerBand = Math.Max(newLowerBand, lowerBand.Last());
 
-            int newDirection = direction.Last();
-            if (Bars.ClosePrices.Last(0) > upperBand.Last())
-                newDirection = -1;
-            else if (Bars.ClosePrices.Last(0) < lowerBand.Last())
-                newDirection = 1;
+            UpdateDirectionAndBands(newUpperBand, newLowerBand);
+        }
 
+        private void UpdateDirectionAndBands(double newUpperBand, double newLowerBand)
+        {
+            int newDirection = direction.Last();
+            if (MarketSeries.Close.Last(0) > upperBand.Last())
+                newDirection = 1;
+            else if (MarketSeries.Close.Last(0) < lowerBand.Last())
+                newDirection = -1;
+
+            // Update queues
             upperBand.Enqueue(newUpperBand);
             lowerBand.Enqueue(newLowerBand);
             direction.Enqueue(newDirection);
-            superTrend.Enqueue(newDirection == -1 ? newLowerBand : newUpperBand);
 
-            MaintainQueueSize(upperBand);
-            MaintainQueueSize(lowerBand);
-            MaintainQueueSize(direction);
-            MaintainQueueSize(superTrend);
+            // Maintain queue size
+            while (upperBand.Count > QueueSize) upperBand.Dequeue();
+            while (lowerBand.Count > QueueSize) lowerBand.Dequeue();
+            while (direction.Count > QueueSize) direction.Dequeue();
         }
 
-        private double GetVolatilityCluster()
+        private bool HasSufficientTimePassed()
         {
-            if (volatilityData.Count == 0) return 0;
-
-            var sortedVol = volatilityData.OrderBy(x => x).ToList();
-            int highIndex = Math.Min((int)(sortedVol.Count * HighVolPercentile), sortedVol.Count - 1);
-            int medIndex = Math.Min((int)(sortedVol.Count * MedVolPercentile), sortedVol.Count - 1);
-            int lowIndex = Math.Min((int)(sortedVol.Count * LowVolPercentile), sortedVol.Count - 1);
-
-            double highVol = sortedVol[highIndex];
-            double medVol = sortedVol[medIndex];
-            double lowVol = sortedVol[lowIndex];
-
-            double currentVol = atr.Result.Last(0);
+            if (lastTradeTime == DateTime.MinValue) return true;
             
-            var distances = new[]
-            {
-                Math.Abs(currentVol - highVol),
-                Math.Abs(currentVol - medVol),
-                Math.Abs(currentVol - lowVol)
-            };
+            var currentTime = MarketSeries.OpenTime.Last();
+            var timeFrame = TimeFrame.ToString();
+            int requiredMinutes = MinBarsBetweenTrades * GetTimeframeMinutes();
             
-            currentCluster = Array.IndexOf(distances, distances.Min());
-            return new[] { highVol, medVol, lowVol }[currentCluster];
+            return currentTime >= lastTradeTime.AddMinutes(requiredMinutes);
+        }
+
+        private int GetTimeframeMinutes()
+        {
+            var timeFrame = TimeFrame.ToString();
+            
+            if (timeFrame.Contains("Minute"))
+                return timeFrame == "Minute" ? 1 : int.Parse(timeFrame.Replace("Minute", ""));
+            else if (timeFrame.Contains("Hour"))
+                return timeFrame == "Hour" ? 60 : int.Parse(timeFrame.Replace("Hour", "")) * 60;
+            else if (timeFrame == "Daily")
+                return 1440;
+                
+            return 1;
         }
 
         private bool IsTrendConfirmed(TradeType tradeType)
         {
-            double currentRsi = rsi.Result.Last(0);
+            if (!UsePriceActionConfirmation) return true;
+
+            double currentPrice = MarketSeries.Close.Last(0);
+            double ema20Value = ema20.Result.Last(0);
+            double ema50Value = ema50.Result.Last(0);
+            double rsiValue = rsi.Result.Last(0);
             
+            double macdMain = macd.MACD.Last(0);
+            double macdSignal = macd.Signal.Last(0);
+            bool macdBullish = macdMain > macdSignal;
+            bool macdBearish = macdMain < macdSignal;
+
             if (tradeType == TradeType.Buy)
-                return currentRsi > MinRSI && currentRsi < 50;
+            {
+                bool priceAboveEma = currentPrice > ema20Value && ema20Value > ema50Value;
+                bool rsiSupport = rsiValue > 30 && rsiValue < 70;
+                return priceAboveEma && (rsiSupport || macdBullish);
+            }
             else
-                return currentRsi < MaxRSI && currentRsi > 50;
+            {
+                bool priceBelowEma = currentPrice < ema20Value && ema20Value < ema50Value;
+                bool rsiSupport = rsiValue > 30 && rsiValue < 70;
+                return priceBelowEma && (rsiSupport || macdBearish);
+            }
         }
 
-private bool HasSufficientTimePassed()
-{
-    TimeSpan timeSinceLastTrade = MarketSeries.OpenTime.Last() - lastTradeTime;
-    int minutesPerBar;
-    var timeFrame = TimeFrame.ToString();
-    
-    if (timeFrame.Contains("Minute"))
-    {
-        if (timeFrame == "Minute")
-            minutesPerBar = 1;
-        else
-            minutesPerBar = int.Parse(timeFrame.Replace("Minute", ""));
-    }
-    else if (timeFrame.Contains("Hour"))
-    {
-        if (timeFrame == "Hour")
-            minutesPerBar = 60;
-        else
-            minutesPerBar = int.Parse(timeFrame.Replace("Hour", "")) * 60;
-    }
-    else if (timeFrame == "Daily")
-        minutesPerBar = 1440;
-    else
-        minutesPerBar = 1;
-    
-    return timeSinceLastTrade.TotalMinutes >= MinBarsSinceLastTrade * minutesPerBar;
-}
-
-        private void HandleTrading()
+        private void ExecuteTrading()
         {
-            if (direction.Count < 2) return;
+            if (direction.Count < 2 || !HasSufficientTimePassed() || HasOpenPosition())
+                return;
 
             var dirArray = direction.ToArray();
-            bool bullishCross = dirArray[dirArray.Length - 1] < dirArray[dirArray.Length - 2];
-            bool bearishCross = dirArray[dirArray.Length - 1] > dirArray[dirArray.Length - 2];
+            bool signalChange = dirArray[dirArray.Length - 1] != dirArray[dirArray.Length - 2];
+            
+            if (!signalChange) return;
 
             double volume = Symbol.NormalizeVolumeInUnits(Symbol.QuantityToVolumeInUnits(1.0));
-            double currentPrice = Symbol.Bid;
+            bool isBuySignal = dirArray[dirArray.Length - 1] == 1;
 
-            if (!HasSufficientTimePassed()) return;
-
-            if (bullishCross && !HasOpenPosition() && IsTrendConfirmed(TradeType.Buy))
+            if (isBuySignal && IsTrendConfirmed(TradeType.Buy))
             {
                 var result = ExecuteMarketOrder(TradeType.Buy, SymbolName, volume, "Adaptive SuperTrend Buy", 
                     StopLossPips, TakeProfitPips);
                     
                 if (result.IsSuccessful)
-                {
-                    lastTradePrice = result.Position.EntryPrice;
                     lastTradeTime = MarketSeries.OpenTime.Last();
-                }
             }
-            else if (bearishCross && !HasOpenPosition() && IsTrendConfirmed(TradeType.Sell))
+            else if (!isBuySignal && IsTrendConfirmed(TradeType.Sell))
             {
                 var result = ExecuteMarketOrder(TradeType.Sell, SymbolName, volume, "Adaptive SuperTrend Sell", 
                     StopLossPips, TakeProfitPips);
                     
                 if (result.IsSuccessful)
-                {
-                    lastTradePrice = result.Position.EntryPrice;
                     lastTradeTime = MarketSeries.OpenTime.Last();
-                }
             }
         }
 

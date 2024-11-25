@@ -27,8 +27,8 @@ namespace cAlgo.Robots
         [Parameter("Take Profit (pips)", DefaultValue = 70)]
         public int TakeProfitPips { get; set; }
 
-        [Parameter("Trade Volume (units)", DefaultValue = 100000)]
-        public double TradeVolumeInUnits { get; set; }
+        [Parameter("Trade Volume (lots)", DefaultValue = 1.0)]
+        public double TradeLots { get; set; }
 
         private MovingAverage epanechnikovMA;
         private MovingAverage logisticMA;
@@ -58,8 +58,10 @@ namespace cAlgo.Robots
 
             InitializeArrays();
             
-            normalizedTradeVolume = Symbol.NormalizeVolumeInUnits(TradeVolumeInUnits, RoundingMode.ToNearest);
-            Print($"Normalized trade volume: {normalizedTradeVolume} units");
+            // Convert lots to units
+            double volumeInUnits = TradeLots * Symbol.LotSize;
+            normalizedTradeVolume = Symbol.NormalizeVolumeInUnits(volumeInUnits, RoundingMode.ToNearest);
+            Print($"Normalized trade volume: {normalizedTradeVolume} units ({TradeLots} lots)");
         }
 
         private void InitializeArrays()
