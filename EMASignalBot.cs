@@ -16,6 +16,12 @@ namespace cAlgo.Robots
         [Parameter("Position Volume (Lots)", DefaultValue = 1.0, MinValue = 0.1)]
         public double Volume { get; set; }
 
+        [Parameter("Stop Loss (Pips)", DefaultValue = 20, MinValue = 0)]
+        public double StopLossPips { get; set; }
+
+        [Parameter("Take Profit (Pips)", DefaultValue = 40, MinValue = 0)]
+        public double TakeProfitPips { get; set; }
+
         private ExponentialMovingAverage ema1;
         private ExponentialMovingAverage ema2;
         private int lastBarIndex = -1;
@@ -49,13 +55,16 @@ namespace cAlgo.Robots
                             ema2Value > ema1Value && 
                             ema2ValuePrev < ema1ValuePrev;
 
-            // Close existing positions if opposite signal appears
-            foreach (var position in Positions)
+            // Close existing positions if opposite signal appears and StopLossPips > 0
+            if (StopLossPips > 0)
             {
-                if ((position.TradeType == TradeType.Buy && sellSignal) ||
-                    (position.TradeType == TradeType.Sell && buySignal))
+                foreach (var position in Positions)
                 {
-                    ClosePosition(position);
+                    if ((position.TradeType == TradeType.Buy && sellSignal) ||
+                        (position.TradeType == TradeType.Sell && buySignal))
+                    {
+                        ClosePosition(position);
+                    }
                 }
             }
 
@@ -64,20 +73,30 @@ namespace cAlgo.Robots
             {
                 if (buySignal)
                 {
-                    ExecuteMarketOrder(TradeType.Buy, SymbolName, Volume * 100000, "Buy Signal");
+                    PlaceMarketOrder(TradeType.Buy);
                 }
                 else if (sellSignal)
                 {
-                    ExecuteMarketOrder(TradeType.Sell, SymbolName, Volume * 100000, "Sell Signal");
+                    PlaceMarketOrder(TradeType.Sell);
                 }
             }
         }
 
+        private void PlaceMarketOrder(TradeType tradeType)
+        {
+            var volumeInUnits = Volume * 100000;
+            var label = tradeType == TradeType.Buy ? "Buy Signal" : "Sell Signal";
+            ExecuteMarketOrder(tradeType, SymbolName, volumeInUnits, label, StopLossPips, TakeProfitPips);
+        }
+
         protected override void OnStop()
         {
-            foreach (var position in Positions)
+            if (StopLossPips > 0)
             {
-                ClosePosition(position);
+                foreach (var position in Positions)
+                {
+                    ClosePosition(position);
+                }
             }
         }
     }
